@@ -4,9 +4,9 @@ Usage on VM 111:
     .venv/bin/python app/production_engine_v2.py --job JOB_ID --plan
     .venv/bin/python app/production_engine_v2.py --job JOB_ID --render
 
-Design rules: render original text slides on solid dark backgrounds, never
-fetch photographs, never publish, never overwrite an existing preview, and
-keep intermediate files in the job-scoped directory.
+Design rules: draw the existing text slides above an optional cached
+photograph, never download images while rendering, never publish, never
+overwrite an existing preview, and keep intermediate files in the job directory.
 """
 
 import argparse
@@ -23,8 +23,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 try:
     from app.media_validate import validate_preview
+    from app.background_images import compose_scene_background, prepare_plan_backgrounds
 except ImportError:  # running as a script adds app/ to sys.path
     from media_validate import validate_preview
+    from background_images import compose_scene_background, prepare_plan_backgrounds
 
 ROOT = Path(os.environ.get('J3G_ROOT', '/opt/j3g-youtube-ai'))
 JOBS = ROOT / 'data' / 'jobs'
@@ -98,7 +100,6 @@ def make_plan(folder):
         })
     plan = {
         'schema_version': 2,
-        'background_mode': 'solid',
         'job_id': folder.name,
         'topic': topic,
         'narration_source': narration_file.name,
@@ -113,9 +114,15 @@ def make_plan(folder):
         # but drop old photo queries and paths. No external images are used.
         stored = json.loads(dest.read_text(encoding='utf-8'))
         if stored.get('narration_source') == narration_file.name and len(stored.get('scenes', [])) == len(scenes):
+            fields = (
+                'heading', 'background_image', 'background_opacity',
+                'background_source', 'background_license', 'background_attribution',
+            )
             for old, new in zip(stored['scenes'], scenes):
-                if old.get('heading'):
-                    new['heading'] = old['heading']
+                for field in fields:
+                    if old.get(field):
+                        new[field] = old[field]
+    prepare_plan_backgrounds(plan, folder, ROOT)
     dest.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding='utf-8')
     return plan
 
@@ -167,9 +174,14 @@ def render_slides(plan, folder):
     location = folder / 'slides_auto'
     location.mkdir(parents=True, exist_ok=True)
     out = []
+    used = []
+    roots = [folder, folder / 'backgrounds', folder / 'background_library', ROOT / 'assets' / 'backgrounds']
     for scene in plan['scenes']:
-        # 720x1280 RGB: no remote image, media rights, or extra dependency.
-        im = Image.new('RGB', (720, 1280), '#0c1424')
+        # Text, panels, and positions below are unchanged. The photograph is
+        # only the base layer and is omitted when it is missing or invalid.
+        im, image_path = compose_scene_background(scene, plan, roots)
+        if image_path:
+            used.append(scene.get('background_image') or image_path)
         draw = ImageDraw.Draw(im)
         panel(draw, (34, 35, 686, 122), fill='#123b66', border='#123b66', radius=18)
         fit(draw, 'J3G  TECH  EXPLAINED', (58, 52, 604, 54), 30, 22, bold=True)
@@ -184,7 +196,7 @@ def render_slides(plan, folder):
         dest = location / f'{scene["number"]:02}.png'
         im.save(dest)
         out.append(dest)
-    return out
+    return out, used
 
 
 def audio_duration(audio):
@@ -272,14 +284,17 @@ def main():
     print('JOB:', folder.name)
     print('TOPIC:', plan['topic'])
     print('SCENES:', len(plan['scenes']))
-    print('BACKGROUND: solid dark, no external photos')
+    if plan.get('background_mode') == 'photo':
+        print('BACKGROUND: cached photograph at configured opacity, solid fallback')
+    else:
+        print('BACKGROUND: solid dark, no external photos')
     for scene in plan['scenes']:
         print(f"  {scene['number']}. {scene['heading']}")
     print('PLAN:', folder / 'production_plan.json')
     if args.plan:
         print('PLAN READY. NO PHOTOS DOWNLOADED, NO VIDEO CHANGED.')
         return
-    slides = render_slides(plan, folder)
+    slides, used_photos = render_slides(plan, folder)
     audio = ensure_audio(folder, plan)
     video, audio_sec, video_sec = encode_preview(folder, plan, slides, audio)
     (folder / 'production_plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding='utf-8')
@@ -288,14 +303,14 @@ def main():
         'status': 'AWAITING_HUMAN_REVIEW',
         'published': False,
         'preview_video': str(video),
-        'photographs': [],
-        'background_mode': 'solid',
+        'photographs': used_photos,
+        'background_mode': plan.get('background_mode') or 'solid',
         'speaker': json.loads((ROOT / 'voice_config.json').read_text())['speaker'],
-        'background_opacity': 0,
+        'background_opacity': plan.get('background_opacity') if plan.get('background_mode') == 'photo' else 0,
         'audio_duration_seconds': round(audio_sec, 2),
         'video_duration_seconds': round(video_sec, 2),
         'scene_timing': 'estimated_by_word_count, not word-level aligned',
-        'media_license_review_required': False,
+        'media_license_review_required': bool(used_photos),
     }
     (folder / 'production_report_auto.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print('PREVIEW CREATED:', video)

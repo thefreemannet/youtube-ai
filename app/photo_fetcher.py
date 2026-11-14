@@ -73,24 +73,31 @@ def fetch_one(topic='hvac'):
                 'action': 'query', 'format': 'json', 'generator': 'search',
                 'gsrnamespace': '6', 'gsrsearch': query, 'gsrlimit': '30',
                 'prop': 'imageinfo', 'iiprop': 'url|size|mime|extmetadata',
-                'iiurlwidth': '1920',
                 'iiextmetadatafilter': 'LicenseShortName|LicenseUrl|Artist|Credit|UsageTerms',
             }
-            response = client.get(API, params=params)
-            response.raise_for_status()
-            body = response.json()
+            try:
+                response = client.get(API, params=params)
+                response.raise_for_status()
+                body = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                print('Skipping query because the image service is unavailable:', type(exc).__name__)
+                continue
             if 'error' in body:
-                raise RuntimeError('Commons API: ' + str(body['error']))
+                # A PDF or other non-image in the hit list used to fail the whole
+                # search when image-only parameters were sent. Skip that query.
+                print('Skipping query after Commons error')
+                continue
             pages = (body.get('query') or {}).get('pages') or {}
             print(f'Search "{query}": {len(pages)} candidates')
             for page in pages.values():
                 title = page.get('title', '')
-                if not title.lower().endswith(('.jpg', '.jpeg')):
+                info = (page.get('imageinfo') or [{}])[0]
+                mime = str(info.get('mime') or '')
+                if title.lower().endswith('.pdf') or mime == 'application/pdf':
+                    continue
+                if mime != 'image/jpeg' or not title.lower().endswith(('.jpg', '.jpeg')):
                     continue
                 if any(term in title.lower() for term in BAD_TITLES):
-                    continue
-                info = (page.get('imageinfo') or [{}])[0]
-                if info.get('mime') != 'image/jpeg':
                     continue
                 if info.get('width', 0) * info.get('height', 0) < 1920 * 1080:
                     continue

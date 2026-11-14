@@ -1,6 +1,11 @@
 import json
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps
+
+try:
+    from app.background_images import blend_background
+except ImportError:  # scripts on the server import modules from app/
+    from background_images import blend_background
 
 ROOT = Path("/opt/j3g-youtube-ai")
 CONFIG = ROOT / "visual_config.json"
@@ -14,14 +19,15 @@ def load_config():
 def create_background(photo_path):
     cfg = load_config()
 
-    width, height = cfg["layout"]["resolution"]
+    if list(cfg["layout"]["resolution"]) != [720, 1280]:
+        raise ValueError("Slide resolution must stay 720x1280")
     bgcfg = cfg["background"]
 
     opacity = float(bgcfg["opacity"])
     blur = float(bgcfg["blur_radius"])
 
-    if not 0 <= opacity <= 0.10:
-        raise ValueError("Background opacity exceeds 10%")
+    if not 0.05 <= opacity <= 0.10:
+        raise ValueError("Background opacity must stay between 5% and 10%")
 
     photo_path = Path(photo_path)
 
@@ -49,29 +55,10 @@ def create_background(photo_path):
 
         if source.width * source.height < 1920 * 1080:
             raise ValueError("Image resolution too low")
+        photograph = source.convert("RGB")
 
-        photograph = ImageOps.fit(
-            source,
-            (width, height),
-            method=Image.Resampling.LANCZOS
-        )
-
-    if blur > 0:
-        photograph = photograph.filter(
-            ImageFilter.GaussianBlur(blur)
-        )
-
-    dark_background = Image.new(
-        "RGB",
-        (width, height),
-        "#0b1221"
-    )
-
-    return Image.blend(
-        dark_background,
-        photograph,
-        opacity
-    )
+    # Shared formula: dark * (1 - alpha) + photograph * alpha.
+    return blend_background(photograph, opacity, blur=blur)
 
 
 if __name__ == "__main__":

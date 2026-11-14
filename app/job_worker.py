@@ -45,9 +45,24 @@ def agent_draft_ready(data, folder):
 
 
 def preview_is_complete(folder):
-    """A preview counts only when the file, solid-background report, and media probe agree."""
+    """A preview counts only when the file, background report, and media probe agree."""
     report = read_json(folder / "production_report_auto.json")
-    if report.get("background_mode") != "solid" or report.get("photographs") != []:
+    photos = report.get("photographs")
+    mode = report.get("background_mode")
+    if not isinstance(photos, list):
+        return False
+    if mode == "solid":
+        if photos:
+            return False
+    elif mode == "photo":
+        if photos:
+            try:
+                opacity = float(report.get("background_opacity"))
+            except (TypeError, ValueError):
+                return False
+            if not 0.05 <= opacity <= 0.10:
+                return False
+    else:
         return False
     try:
         validate_preview(folder / "video_auto_preview.mp4")
@@ -89,7 +104,7 @@ def main(job_id):
         if stale.is_file():
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             stale.rename(folder / f"video_auto_preview.invalid-{stamp}.mp4")
-        print("[4] Production Engine: solid backgrounds, XTTS, FFmpeg", flush=True)
+        print("[4] Production Engine: cached backgrounds or solid fallback, XTTS, FFmpeg", flush=True)
         subprocess.run(
             [sys.executable, str(ROOT / "app" / "production_engine_v2.py"), "--job", job_id, "--render"],
             cwd=str(ROOT),
