@@ -36,6 +36,8 @@ class DashboardPageTests(unittest.TestCase):
         self.assertEqual(html.count("<video"), 1)
         self.assertNotIn('class="card"', html)
         self.assertIn("Approve & Publish", html)
+        self.assertIn("Download video", html)
+        self.assertEqual(html.count('id="download-video"'), 1)
         self.assertIn("20261110-225615-919b89", html)
         self.assertIn("20261111-021504-ab7c1a", html)
         self.assertIn("20261113-110306-e1d9dd", html)

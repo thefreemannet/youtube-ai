@@ -419,22 +419,28 @@ def retry_job(job_id: str, request: Request):
     return {"job_id": job_id, "status": "QUEUED", "published": False}
 
 
+def video_response(video, job_id, download):
+    if download:
+        return FileResponse(video, media_type="video/mp4", filename=f"{job_id}.mp4")
+    return FileResponse(video, media_type="video/mp4")
+
+
 @app.get("/videos/{job_id}")
-def get_video(job_id: str):
+def get_video(job_id: str, download: bool = False):
     folder = valid_job(job_id)
     video = folder / "video.mp4"
     if not video.is_file():
         raise HTTPException(404, "Video not found")
-    return FileResponse(video, media_type="video/mp4")
+    return video_response(video, job_id, download)
 
 
 @app.get("/videos/{job_id}/preview")
-def get_preview(job_id: str):
+def get_preview(job_id: str, download: bool = False):
     folder = valid_job(job_id)
     video = folder / "video_auto_preview.mp4"
     if not video.is_file():
         raise HTTPException(404, "Preview not found")
-    return FileResponse(video, media_type="video/mp4")
+    return video_response(video, job_id, download)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -48,6 +48,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .meta { color: #93a4b8; }
 .error { color: #fda4af; white-space: pre-wrap; }
 video { display: block; width: min(100%, 360px); aspect-ratio: 9 / 16; background: #05080f; border-radius: 18px; margin: 16px auto; }
+a.download { display: block; width: min(100%, 360px); margin: 0 auto; text-align: center; text-decoration: none; background: #0369a1; color: white; border-radius: 8px; padding: 11px 14px; font-weight: 700; }
+a.download[hidden] { display: none; }
 .check { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; margin: 10px 0; }
 .check input { margin-top: 3px; }
 .note, .result { white-space: pre-wrap; color: #bfdbfe; }
@@ -90,6 +92,7 @@ summary { cursor: pointer; color: #7dd3fc; font-weight: 700; }
     <p id="video-duration" class="meta"></p>
     <p id="video-error" class="error"></p>
     <video id="player" controls preload="metadata" hidden></video>
+    <a id="download-video" class="download" hidden>Download video</a>
   </section>
   <aside class="pane review-pane">
     <h2>Review and publish</h2>
@@ -174,6 +177,7 @@ function renderStage() {
   const duration = document.getElementById('video-duration');
   const error = document.getElementById('video-error');
   const player = document.getElementById('player');
+  const download = document.getElementById('download-video');
   if (!job) {
     title.textContent = 'Select a video';
     status.textContent = 'Choose a job from the history.';
@@ -181,6 +185,8 @@ function renderStage() {
     error.textContent = '';
     player.hidden = true;
     player.removeAttribute('src');
+    download.hidden = true;
+    download.removeAttribute('href');
     return;
   }
   title.textContent = job.topic || 'Untitled';
@@ -198,6 +204,9 @@ function renderStage() {
   }
   player.hidden = !src;
   if (!src) player.removeAttribute('src');
+  download.hidden = !src;
+  if (src) download.href = src + '?download=1';
+  else download.removeAttribute('href');
 }
 function field(parent, labelText, id, element) {
   const label = document.createElement('label');
