@@ -1,0 +1,23 @@
+{
+  "visual_style": "professional_photography",
+  "apply_to_all_videos": true,
+  "background": {
+    "type": "high_resolution_photograph",
+    "opacity": 0.08,
+    "blur_radius": 2,
+    "scene_relevance_required": true,
+    "licensed_images_only": true,
+    "missing_image_action": "needs_review"
+  },
+  "layout": {
+    "preserve_existing_design": true,
+    "automatic_text_fitting": true,
+    "prevent_text_overflow": true,
+    "aspect_ratio": "9:16",
+    "resolution": [720, 1280]
+  },
+  "narration": {
+    "engine": "xtts",
+    "speaker": "Andrew Chipper"
+  }
+}

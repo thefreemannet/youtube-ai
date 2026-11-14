@@ -1,0 +1,8 @@
+{
+  "engine": "xtts",
+  "server": "192.168.120.107",
+  "speaker": "Andrew Chipper",
+  "language": "en",
+  "speed": 1.0,
+  "fallback": "espeak-ng"
+}
