@@ -222,17 +222,19 @@ def _scene_text(scene):
     ).casefold()
 
 
-def _score(text, subjects):
-    if not isinstance(subjects, list):
-        return 0
-    total = 0
-    for subject in subjects:
-        phrase = " ".join(str(subject).split()).casefold()
-        if len(phrase) < 3:
-            continue
-        if phrase in text:
-            total += 1
-    return total
+_EQUIPMENT = (
+    "air handler", "air handling", "duct", "fan", "motor", "thermostat",
+    "ventilation", "damper", "compressor", "chiller", "pump", "hvac",
+    "variable frequency", "drive", "panel", "coil", "filter", "electrical",
+)
+_UNRELATED_TITLE = ("sculpture", "racing", "formule", "toyota", "corolla", "extravalan")
+
+
+def _has_picture_detail(path):
+    """Reject flat color fields. A photograph has variation across the frame."""
+    sample = decode_image(path).resize((32, 32))
+    colors = sample.getcolors(maxcolors=32 * 32)
+    return bool(colors and len(colors) >= 12)
 
 
 def _library_entries(directories):
@@ -244,8 +246,12 @@ def _library_entries(directories):
         for path in sorted(folder.iterdir()):
             if path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
                 continue
+            if "preview" in path.stem.casefold():
+                continue
             try:
                 _image, metadata, resolved = validate_cached_image(path, [folder])
+                if not _has_picture_detail(resolved):
+                    continue
             except (OSError, ValueError):
                 continue
             entries.append({
@@ -256,43 +262,54 @@ def _library_entries(directories):
     return entries
 
 
-def assign_scenes(scenes, entries):
-    """Give each scene a distinct relevant image, reusing one only as a last resort."""
-    pairs = []
-    for scene_index, scene in enumerate(scenes):
-        text = _scene_text(scene)
-        for image_index, entry in enumerate(entries):
-            score = _score(text, entry["subjects"])
-            if score:
-                pairs.append((-score, scene_index, image_index))
-    pairs.sort()
-    assigned = {}
-    used = set()
-    for _score_key, scene_index, image_index in pairs:
-        if scene_index in assigned or image_index in used:
-            continue
-        assigned[scene_index] = entries[image_index]
-        used.add(image_index)
-    for scene_index, scene in enumerate(scenes):
-        if scene_index in assigned:
-            continue
-        text = _scene_text(scene)
-        best = None
-        best_score = 0
-        for entry in entries:
-            score = _score(text, entry["subjects"])
-            if score > best_score:
-                best = entry
-                best_score = score
-        if best is not None:
-            assigned[scene_index] = best
-    return assigned
+def _entry_focus(entry):
+    metadata = entry.get("metadata") or {}
+    return " ".join([
+        str(metadata.get("title") or ""),
+        str(metadata.get("search_query") or ""),
+        " ".join(str(subject) for subject in entry.get("subjects") or []),
+    ]).casefold()
+
+
+def _video_terms(topic, scenes):
+    blob = " ".join([str(topic or "")] + [_scene_text(scene) for scene in scenes]).casefold()
+    cleaned = "".join(char if char.isalnum() or char.isspace() else " " for char in blob)
+    terms = {word for word in cleaned.split() if len(word) >= 4}
+    for hint in _EQUIPMENT:
+        if hint in blob:
+            terms.add(hint)
+    return terms
+
+
+def _relevance(topic, scenes, entry):
+    title = str((entry.get("metadata") or {}).get("title") or "").casefold()
+    if any(blocked in title for blocked in _UNRELATED_TITLE):
+        return 0
+    focus = _entry_focus(entry)
+    score = 0
+    for term in _video_terms(topic, scenes):
+        if term and term in focus:
+            score += 3 if " " in term else 1
+    return score
+
+
+def assign_scenes(scenes, entries, topic=""):
+    """Use one topic-related photograph for the whole video."""
+    best = None
+    best_score = 0
+    for entry in entries:
+        score = _relevance(topic, scenes, entry)
+        if score > best_score:
+            best, best_score = entry, score
+    if best is None:
+        return {}
+    return {index: best for index in range(len(scenes))}
 
 
 def _write_scene(scene, source, metadata, opacity):
     dest_dir = Path(scene["_background_dir"])
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"{int(scene['number']):02d}{Path(source).suffix.lower()}"
+    dest = dest_dir / f"shared{Path(source).suffix.lower()}"
     if Path(source).resolve() != dest.resolve():
         dest.write_bytes(Path(source).read_bytes())
     sidecar = dest.with_suffix(".json")
@@ -320,7 +337,11 @@ def prepare_plan_backgrounds(plan, folder, root):
         return []
     folder = Path(folder)
     roots = [folder, folder / "backgrounds", folder / "background_library"]
-    library_dirs = [folder / "background_library", Path(root) / "assets" / "backgrounds"]
+    library_dirs = [
+        folder / "background_library",
+        Path(root) / "assets" / "backgrounds",
+        Path(root) / "assets" / "photos",
+    ]
     entries = _library_entries(library_dirs)
     needs = []
     for scene in scenes:
@@ -341,7 +362,7 @@ def prepare_plan_backgrounds(plan, folder, root):
         scene["background_source"] = metadata.get("source")
         scene["background_license"] = metadata.get("license")
         scene["background_attribution"] = metadata.get("attribution")
-    chosen = assign_scenes(needs, entries)
+    chosen = assign_scenes(needs, entries, topic=plan.get("topic") or "")
     for scene, pick in (
         (needs[index], chosen[index])
         for index in range(len(needs))

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app.background_images import (
     assign_scenes,
@@ -23,7 +23,15 @@ DARK = (12, 20, 36)
 
 def write_photo(folder, name, color, subjects, license_name="CC0", approved=True):
     path = Path(folder) / name
-    Image.new("RGB", (1280, 1920), color).save(path)
+    image = Image.new("RGB", (1280, 1920), color)
+    draw = ImageDraw.Draw(image)
+    for band in range(12):
+        shade = (band * 21) % 255
+        draw.rectangle(
+            (80 + band * 36, 120, 110 + band * 36, 1800),
+            fill=(shade, (color[1] + shade) % 256, (color[2] + band) % 256),
+        )
+    image.save(path)
     metadata = {
         "approved_for_use": approved,
         "license": license_name,
@@ -94,48 +102,57 @@ class ImageValidationTests(unittest.TestCase):
 
 
 class AssignmentTests(unittest.TestCase):
-    def test_scenes_receive_different_relevant_photos(self):
+    def test_one_related_photo_is_used_for_the_whole_video(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             library = folder / "background_library"
             library.mkdir()
-            drive = write_photo(library, "drive.png", (255, 0, 0), ["variable frequency drive", "vfd panel"])
-            fan = write_photo(library, "fan.png", (0, 255, 0), ["supply fan", "electric motor"])
+            write_photo(library, "drive.png", (255, 0, 0), ["variable frequency drive", "vfd panel"])
+            write_photo(library, "fan.png", (0, 255, 0), ["supply fan", "electric motor"])
+            Image.new("RGB", (1280, 1920), (0, 0, 255)).save(library / "flat.png")
+            (library / "flat.json").write_text(json.dumps({
+                "approved_for_use": True,
+                "license": "CC0",
+                "source": "local:j3g-original-test",
+                "author": "J3G",
+                "title": "flat",
+                "attribution": "flat — J3G — CC0 — original test photograph",
+                "subjects": ["supply fan", "electric motor"],
+            }), encoding="utf-8")
             scenes = [
-                {"number": 1, "heading": "Drive", "body": "The variable frequency drive panel starts the motor."},
-                {"number": 2, "heading": "Fan", "body": "The supply fan and electric motor move the air."},
+                {"number": 1, "heading": "Fan", "body": "The supply fan moves air."},
+                {"number": 2, "heading": "Motor", "body": "The electric motor is inspected."},
             ]
-            chosen = assign_scenes(scenes, [
-                {"path": drive, "metadata": {}, "subjects": ["variable frequency drive", "vfd panel"]},
-                {"path": fan, "metadata": {}, "subjects": ["supply fan", "electric motor"]},
-            ])
-            self.assertNotEqual(chosen[0]["path"], chosen[1]["path"])
-            plan = {"scenes": scenes}
+            plan = {"topic": "How a supply fan and electric motor move air", "scenes": scenes}
             (folder / "visual_config.json").write_text(json.dumps({
                 "background": {"mode": "photo", "opacity": 0.08, "blur_radius": 0}
             }), encoding="utf-8")
             prepare_plan_backgrounds(plan, folder, folder)
-            self.assertEqual(plan["background_mode"], "photo")
-            self.assertEqual(plan["background_opacity"], 0.08)
-            self.assertNotEqual(plan["scenes"][0]["background_image"], plan["scenes"][1]["background_image"])
+            self.assertEqual(plan["scenes"][0]["background_image"], plan["scenes"][1]["background_image"])
+            self.assertTrue(plan["scenes"][0]["background_image"].endswith("shared.png"))
             first, _used = compose_scene_background(plan["scenes"][0], plan, [folder, folder / "backgrounds"])
             second, _used = compose_scene_background(plan["scenes"][1], plan, [folder, folder / "backgrounds"])
-            self.assertEqual(first.getpixel((8, 8)), expected_background_pixel((255, 0, 0), 0.08))
-            self.assertEqual(second.getpixel((8, 8)), expected_background_pixel((0, 255, 0), 0.08))
+            expected = expected_background_pixel((0, 255, 0), 0.08)
+            self.assertEqual(first.getpixel((8, 8)), expected)
+            self.assertEqual(second.getpixel((8, 8)), expected)
 
-    def test_reuses_one_licensed_photo_only_when_nothing_else_matches(self):
+    def test_same_photo_covers_every_scene_and_unrelated_video_gets_none(self):
         entries = [
-            {"path": "motor.png", "metadata": {}, "subjects": ["electric motor"]},
+            {"path": "motor.png", "metadata": {"title": "Electric motor"}, "subjects": ["electric motor"]},
         ]
         scenes = [
             {"heading": "Motor", "body": "The electric motor turns."},
             {"heading": "Again", "body": "That same electric motor is inspected."},
             {"heading": "Sky", "body": "Clouds are not equipment."},
         ]
-        chosen = assign_scenes(scenes, entries)
-        self.assertEqual(chosen[0]["path"], "motor.png")
-        self.assertEqual(chosen[1]["path"], "motor.png")
-        self.assertNotIn(2, chosen)
+        chosen = assign_scenes(scenes, entries, topic="electric motor")
+        self.assertEqual([chosen[index]["path"] for index in range(3)], ["motor.png", "motor.png", "motor.png"])
+        unrelated = assign_scenes(
+            [{"heading": "Sky", "body": "Clouds are not equipment."}],
+            entries,
+            topic="clouds",
+        )
+        self.assertEqual(unrelated, {})
 
     def test_prepare_does_not_contact_a_network(self):
         source = inspect.getsource(prepare_plan_backgrounds)
