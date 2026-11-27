@@ -37,6 +37,12 @@ def save_record(data):
     os.replace(temp, RECORD)
 
 
+def reel_upload_can_retry(message, attempt, limit=6):
+    """Meta sometimes rejects a valid Reel upload and accepts the next session."""
+    text = str(message or "")
+    return attempt + 1 < limit and "Request processing failed" in text
+
+
 def checked_response(response):
     try:
         data = response.json()
@@ -47,10 +53,15 @@ def checked_response(response):
 
     if not response.ok:
         error = data.get("error", {}) if isinstance(data, dict) else {}
+        debug = data.get("debug_info", {}) if isinstance(data, dict) else {}
+        detail = " ".join(str(error.get("message") or debug.get("message") or "").split())
+        if any(word in detail.lower() for word in ("token", "bearer", "oauth", "access_token")):
+            detail = ""
+        extra = f" {detail[:180]}" if detail else ""
         raise RuntimeError(
             f"Meta API error: HTTP {response.status_code}, "
             f"code={error.get('code')}, "
-            f"subcode={error.get('error_subcode')}"
+            f"subcode={error.get('error_subcode')}.{extra}"
         )
 
     if not isinstance(data, dict):

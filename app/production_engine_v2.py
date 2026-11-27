@@ -24,9 +24,11 @@ from PIL import Image, ImageDraw, ImageFont
 try:
     from app.media_validate import validate_preview
     from app.background_images import compose_scene_background, prepare_plan_backgrounds
+    from app.categories import category_info, normalize_category
 except ImportError:  # running as a script adds app/ to sys.path
     from media_validate import validate_preview
     from background_images import compose_scene_background, prepare_plan_backgrounds
+    from categories import category_info, normalize_category
 
 ROOT = Path(os.environ.get('J3G_ROOT', '/opt/j3g-youtube-ai'))
 JOBS = ROOT / 'data' / 'jobs'
@@ -90,6 +92,12 @@ def make_plan(folder):
     narration = narration_file.read_text(encoding='utf-8').strip()
     chunks = group_scenes(narration)
     topic = metadata.get('topic') or 'Educational explanation'
+    if str(metadata.get('language') or '').lower() == 'es':
+        try:
+            from app.spanish_titles import display_title
+        except ImportError:
+            from spanish_titles import display_title
+        topic = display_title(topic, 'es', narration)
     scenes = []
     for i, body in enumerate(chunks, start=1):
         title = ' '.join(body.split()[:6]).rstrip('.,;:')
@@ -98,10 +106,15 @@ def make_plan(folder):
             'heading': title,
             'body': body,
         })
+    info = category_info(metadata.get('category'))
     plan = {
         'schema_version': 2,
         'job_id': folder.name,
         'topic': topic,
+        'language': 'es' if str(metadata.get('language') or '').lower() == 'es' else 'en',
+        'category': normalize_category(metadata.get('category')),
+        'character_id': info['character_id'],
+        'scene_note': info.get('scene_note') or '',
         'narration_source': narration_file.name,
         'source_quality_status': metadata.get('status', 'UNKNOWN'),
         'review_status': 'HUMAN_REVIEW_REQUIRED',
@@ -166,7 +179,8 @@ def fit(draw, text, box, max_size=44, min_size=17, bold=False, color='#f8fafc'):
 def run(cmd, timeout=900):
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode:
-        raise RuntimeError(f'Command failed ({proc.returncode}): {cmd[0]}\n{proc.stderr[-2000:]}')
+        detail = ((proc.stderr or '') + '\n' + (proc.stdout or '')).strip()
+        raise RuntimeError(f'Command failed ({proc.returncode}): {cmd[0]}\n{detail[-2000:]}')
     return proc.stdout.strip()
 
 
@@ -208,8 +222,9 @@ def audio_duration(audio):
 
 def ensure_audio(folder, plan):
     audio = folder / 'narration_auto.wav'
-    if audio.is_file():
+    if audio.is_file() and not (folder / 'voice_fallback.txt').is_file():
         return audio
+    audio.unlink(missing_ok=True)
     voice = json.loads((ROOT / 'voice_config.json').read_text(encoding='utf-8'))
     server = voice.get('server', '192.168.120.107')
     if server not in ('192.168.120.107', 'ai-gpu.lab.j3gdigital.com'):
@@ -217,22 +232,75 @@ def ensure_audio(folder, plan):
     userhost = 'thefreemannet@' + server
     remote_name = f'{folder.name}_auto_xtts.wav'
     remote_volume = '/opt/j3gdigital/creator-studio/data/' + remote_name
+    speaker = voice.get('speaker', 'Andrew Chipper')
+    language = plan.get('language') or voice.get('language', 'en')
+    try:
+        from app.spoken_terms import spoken_narration
+    except ImportError:
+        from spoken_terms import spoken_narration
+    spoken = spoken_narration(
+        ' '.join((folder / plan['narration_source']).read_text(encoding='utf-8').split()),
+        language,
+    )
     payload = json.dumps({
-        'text': ' '.join((folder / plan['narration_source']).read_text(encoding='utf-8').split()),
-        'language': voice.get('language', 'en'),
-        'speaker': voice.get('speaker', 'Andrew Chipper'),
+        'text': spoken,
+        'language': language,
+        'speaker': speaker,
         'speed': voice.get('speed', 1.0),
         'output': '/data/' + remote_name,
     })
-    response = run(['ssh', '-o', 'BatchMode=yes', userhost,
-        'curl --fail-with-body -sS --max-time 600 -X POST http://172.18.0.9:8000/synthesize '
+    # The container address on ai-gpu changes when that machine's services restart.
+    remote = (
+        "ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' j3g-ai-tts-xtts) && "
+        'test -n "$ip" && '
+        'curl --fail-with-body -sS --max-time 600 -X POST "http://$ip:8000/synthesize" '
         "-H 'Content-Type: application/json' -d " + shlex.quote(payload)
-    ], timeout=750)
+    )
+    print('XTTS:', server, 'speaker', speaker, plan.get('language') or 'en', flush=True)
+    response = run(['ssh', '-o', 'BatchMode=yes', userhost, remote], timeout=750)
     data = json.loads(response)
     if data.get('output') != '/data/' + remote_name:
         raise RuntimeError('XTTS output path mismatch')
     run(['scp', '-o', 'BatchMode=yes', f'{userhost}:{remote_volume}', str(audio)], timeout=180)
+    (folder / 'voice_fallback.txt').unlink(missing_ok=True)
     return audio
+
+
+def animation_mode():
+    """Still frames are the default. A slow pan remains available in the config."""
+    try:
+        raw = json.loads((ROOT / 'visual_config.json').read_text(encoding='utf-8'))
+        mode = str((raw.get('animation') or {}).get('mode') or 'still').strip().lower()
+    except (OSError, ValueError, TypeError):
+        mode = 'still'
+    if mode not in ('still', 'kenburns'):
+        return 'still'
+    return mode
+
+
+def motion_clip(image, seconds, dest, direction):
+    seconds = max(0.4, float(seconds))
+    dur = f'{seconds:.3f}'
+    if direction == 0:
+        x_expr = f'(iw-720)*t/{dur}'
+        y_expr = '(ih-1280)*0.2'
+    elif direction == 1:
+        x_expr = f'(iw-720)*(1-t/{dur})'
+        y_expr = '(ih-1280)*0.2'
+    else:
+        x_expr = '(iw-720)*0.5'
+        y_expr = f'(ih-1280)*t/{dur}'
+    run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+        '-loop', '1', '-framerate', '24', '-i', str(image),
+        '-t', dur,
+        '-vf', (
+            'scale=806:1434:force_original_aspect_ratio=increase,'
+            f'crop=720:1280:{x_expr}:{y_expr},fps=24,format=yuv420p'
+        ),
+        '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+        str(dest),
+    ], timeout=300)
 
 
 def encode_preview(folder, plan, slides, audio):
@@ -241,18 +309,52 @@ def encode_preview(folder, plan, slides, audio):
         raise ValueError('Invalid XTTS narration duration')
     totals = [max(1, len(s['body'].split())) for s in plan['scenes']]
     weights = [x / sum(totals) for x in totals]
+    scene_seconds = [duration * weight for weight in weights]
+    sources = list(slides)
+    used_motion = False
+    if animation_mode() == 'kenburns':
+        motion_dir = folder / 'motion_auto'
+        motion_dir.mkdir(parents=True, exist_ok=True)
+        clips = []
+        try:
+            for index, (image, seconds) in enumerate(zip(slides, scene_seconds)):
+                clip = motion_dir / f'{index + 1:02}.mp4'
+                print(f'MOTION {index + 1}/{len(slides)}: {seconds:.1f}s', flush=True)
+                motion_clip(image, seconds, clip, index % 3)
+                clips.append(clip)
+            sources = clips
+            used_motion = True
+        except Exception as exc:
+            print('MOTION FALLBACK: still frames.', exc, flush=True)
+            sources = list(slides)
+            used_motion = False
     concat = folder / 'slides_auto.txt'
     with concat.open('w', encoding='utf-8') as out:
-        for image, weight in zip(slides, weights):
-            out.write(f"file '{image}'\n")
-            out.write(f'duration {duration * weight:.5f}\n')
-        out.write(f"file '{slides[-1]}'\n")
+        if used_motion:
+            for clip in sources:
+                out.write(f"file '{clip}'\n")
+        else:
+            for image, seconds in zip(sources, scene_seconds):
+                out.write(f"file '{image}'\n")
+                out.write(f'duration {seconds:.5f}\n')
+            out.write(f"file '{sources[-1]}'\n")
+    plan['animation_mode'] = 'kenburns' if used_motion else 'still'
+    narration_name = plan.get('narration_source') or 'narration.txt'
+    narration_text = (folder / narration_name).read_text(encoding='utf-8')
+    try:
+        from app.subtitles import write_subtitles
+    except ImportError:
+        from subtitles import write_subtitles
+    subtitles = write_subtitles(folder, narration_text, duration)
+    plan['subtitles'] = str(subtitles)
+    print('SUBTITLES:', subtitles, flush=True)
+    video_filter = f"fps=24,subtitles={subtitles},format=yuv420p"
     final = folder / 'video_auto_preview.mp4'
     staging = folder / 'video_auto_preview.tmp.mp4'
     run([
         'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'concat', '-safe', '0', '-i', str(concat), '-i', str(audio),
-        '-t', f'{duration:.3f}', '-vf', 'fps=24,format=yuv420p',
+        '-t', f'{duration:.3f}', '-vf', video_filter,
         '-c:v', 'libx264', '-preset', 'fast',
         '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', str(staging)
     ])
@@ -284,7 +386,9 @@ def main():
     print('JOB:', folder.name)
     print('TOPIC:', plan['topic'])
     print('SCENES:', len(plan['scenes']))
-    if plan.get('background_mode') == 'photo':
+    if plan.get('background_mode') == 'cartoon':
+        print('BACKGROUND: vertical cartoon technician, 720 by 1280')
+    elif plan.get('background_mode') == 'photo':
         print('BACKGROUND: cached photograph at configured opacity, solid fallback')
     else:
         print('BACKGROUND: solid dark, no external photos')
@@ -294,7 +398,15 @@ def main():
     if args.plan:
         print('PLAN READY. NO PHOTOS DOWNLOADED, NO VIDEO CHANGED.')
         return
-    slides, used_photos = render_slides(plan, folder)
+    if plan.get('background_mode') == 'cartoon':
+        try:
+            from app.cartoon_scenes import render_plan_frames
+        except ImportError:
+            from cartoon_scenes import render_plan_frames
+        slides = render_plan_frames(plan, folder)
+        used_photos = []
+    else:
+        slides, used_photos = render_slides(plan, folder)
     audio = ensure_audio(folder, plan)
     video, audio_sec, video_sec = encode_preview(folder, plan, slides, audio)
     (folder / 'production_plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding='utf-8')
@@ -305,16 +417,23 @@ def main():
         'preview_video': str(video),
         'photographs': used_photos,
         'background_mode': plan.get('background_mode') or 'solid',
-        'speaker': json.loads((ROOT / 'voice_config.json').read_text())['speaker'],
+        'speaker': 'Local preview voice' if (folder / 'voice_fallback.txt').is_file() else json.loads((ROOT / 'voice_config.json').read_text())['speaker'],
         'background_opacity': plan.get('background_opacity') if plan.get('background_mode') == 'photo' else 0,
         'audio_duration_seconds': round(audio_sec, 2),
         'video_duration_seconds': round(video_sec, 2),
+        'min_seconds': 60,
+        'animation_mode': plan.get('animation_mode') or 'still',
+        'character_id': plan.get('character_id'),
+        'subtitles': plan.get('subtitles') or str(folder / 'subtitles.ass'),
         'scene_timing': 'estimated_by_word_count, not word-level aligned',
         'media_license_review_required': bool(used_photos),
     }
     (folder / 'production_report_auto.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print('PREVIEW CREATED:', video)
     print('VIDEO:', round(video_sec, 2), 'seconds; NARRATION:', round(audio_sec, 2), 'seconds')
+    print('ANIMATION:', plan.get('animation_mode') or 'still')
+    if audio_sec < 60:
+        print('DURATION WARNING: narration is under 60 seconds.')
     print('NOT PUBLISHED. HUMAN TECHNICAL AND VIDEO REVIEW REQUIRED.')
 
 

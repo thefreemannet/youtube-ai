@@ -1,0 +1,26 @@
+{
+  "id": "hvac-tech",
+  "name": "HVAC technician",
+  "visual_description": "A young cartoon HVAC technician with messy orange hair, large expressive eyes, a blue work shirt with the sleeves rolled, dark gray work pants, brown work boots, and a tool belt with a screwdriver and a wrench. No lab coat, no white coat, no scrubs, no stethoscope, no glasses, no scientist, and no doctor.",
+  "clothing": {
+    "shirt": "blue work shirt, sleeves rolled",
+    "pants": "dark gray work pants",
+    "boots": "brown work boots",
+    "belt": "tool belt with a screwdriver and a wrench"
+  },
+  "colors": {
+    "hair": "orange",
+    "shirt": "blue",
+    "pants": "dark gray",
+    "boots": "brown"
+  },
+  "expressions": ["neutral", "explaining", "pointing", "concerned"],
+  "voice": {
+    "engine": "xtts",
+    "speaker": "Aaron Dreschner",
+    "language": "en",
+    "speed": 1.0
+  },
+  "style": "Flat 2D educational cartoon, thick black ink outlines, solid colors, no gradients, no photorealism, no 3D.",
+  "reference_image": "reference.png"
+}

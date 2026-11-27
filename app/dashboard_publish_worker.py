@@ -1,4 +1,6 @@
 """One-shot upload worker; created only after a logged-in explicit API request."""
+import os
+import signal
 import sys
 from pathlib import Path
 
@@ -7,18 +9,30 @@ from app.publishing_workflow import QUEUES, read_json
 from app.youtube_private_uploader import upload_private
 
 
+class UploadStopped(RuntimeError):
+    """The service stopped this worker before the platform answered."""
+
+
+def _stop_upload(signum, frame):
+    raise UploadStopped('The upload stopped before it finished')
+
+
 def main(platform, job_id):
+    signal.signal(signal.SIGTERM, _stop_upload)
     request_file = QUEUES / platform / f'{job_id}.json'
     data = read_json(request_file)
     if data.get('job_id') != job_id or data.get('platform') != platform or data.get('state') != 'QUEUED':
         raise RuntimeError('Invalid or previously processed upload request')
-    data.update(state='RUNNING', started_utc=now())
+    data.update(state='RUNNING', started_utc=now(), worker_pid=os.getpid())
     update_state(request_file, data)
     try:
         if platform == 'youtube':
             upload_private(job_id, job_id)
         elif platform == 'instagram':
             publish_instagram(job_id)
+        elif platform == 'tiktok':
+            from app.tiktok_uploader import publish
+            publish(job_id)
         else:
             raise RuntimeError('Unsupported publishing platform')
         data.update(state='COMPLETED', completed_utc=now())

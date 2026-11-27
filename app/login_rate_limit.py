@@ -3,8 +3,7 @@
 import hashlib
 import sqlite3
 import time
-
-from app.dashboard_auth import DB
+from contextlib import contextmanager
 
 MAX_FAILURES = 5
 WINDOW_SECONDS = 900
@@ -15,17 +14,23 @@ def _key(username, client_ip):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+@contextmanager
 def _connect():
-    conn = sqlite3.connect(DB, timeout=10)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS login_attempts (
-            key TEXT PRIMARY KEY,
-            failures INTEGER NOT NULL,
-            window_start INTEGER NOT NULL,
-            blocked_until INTEGER NOT NULL
-        )
-    """)
-    return conn
+    from app import dashboard_auth
+    conn = sqlite3.connect(dashboard_auth.DB, timeout=10)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                key TEXT PRIMARY KEY,
+                failures INTEGER NOT NULL,
+                window_start INTEGER NOT NULL,
+                blocked_until INTEGER NOT NULL
+            )
+        """)
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def login_is_blocked(username, client_ip):

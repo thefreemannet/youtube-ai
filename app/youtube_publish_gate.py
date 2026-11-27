@@ -68,7 +68,7 @@ def publishing_preflight(job_id):
         "job_id": job_id,
         "ready_for_oauth_upload": not reasons,
         "upload_performed": False,
-        "publication_privacy": "private",
+        "publication_privacy": "public",
         "approval_current": report["approval_current"],
         "human_confirmations_complete": all(
             confirmations.get(field) is True

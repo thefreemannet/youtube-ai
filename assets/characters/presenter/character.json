@@ -1,0 +1,26 @@
+{
+  "id": "presenter",
+  "name": "Presenter",
+  "visual_description": "A young cartoon presenter with messy orange hair and large expressive eyes. The same person in every scene. No tool belt, no wrench, no screwdriver, no work boots, no lab coat, no scrubs, and no stethoscope.",
+  "clothing": {
+    "shirt": "plain teal shirt",
+    "pants": "dark gray pants",
+    "shoes": "simple dark shoes"
+  },
+  "colors": {
+    "hair": "orange",
+    "shirt": "teal",
+    "pants": "dark gray",
+    "shoes": "dark"
+  },
+  "expressions": ["neutral", "explaining", "pointing", "concerned"],
+  "voice": {
+    "engine": "xtts",
+    "speaker": "Aaron Dreschner",
+    "language": "en",
+    "speed": 1.0
+  },
+  "style": "Flat 2D educational cartoon, thick black ink outlines, solid colors, no gradients, no photorealism, no 3D.",
+  "reference_image": "reference.png",
+  "locked_pose": true
+}

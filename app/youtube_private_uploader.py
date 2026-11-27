@@ -1,4 +1,4 @@
-"""J3G YouTube private uploader.
+"""J3G YouTube uploader. New uploads are public.
 
 Requires human-approved video, reviewed metadata,
 explicit upload command and enabled configuration.
@@ -92,7 +92,7 @@ def check(job_id):
     return {
         "job_id": job_id,
         "ready": not reasons,
-        "privacy": "private",
+        "privacy": "public",
         "uploaded": False,
         "blocking_reasons": list(dict.fromkeys(reasons))
     }
@@ -153,11 +153,12 @@ def upload_private(job_id, confirmation):
         json.dump({
             "job_id": job_id,
             "state": "STARTED",
-            "privacy": "private",
+            "privacy": "public",
             "video_sha256": digest(video),
             "started_utc": datetime.now(timezone.utc).isoformat()
         }, f, indent=2)
 
+    started_network = False
     try:
         service = build(
             "youtube", "v3",
@@ -181,7 +182,7 @@ def upload_private(job_id, confirmation):
                     "categoryId": "27"
                 },
                 "status": {
-                    "privacyStatus": "private"
+                    "privacyStatus": "public"
                 }
             },
             media_body=MediaFileUpload(
@@ -193,6 +194,7 @@ def upload_private(job_id, confirmation):
         )
 
         response = None
+        started_network = True
 
         while response is None:
             _, response = request.next_chunk(
@@ -206,8 +208,8 @@ def upload_private(job_id, confirmation):
 
         write_record({
             "job_id": job_id,
-            "state": "UPLOADED_PRIVATE",
-            "privacy_requested": "private",
+            "state": "UPLOADED_PUBLIC",
+            "privacy_requested": "public",
             "youtube_video_id": video_id,
             "video_sha256": metadata["approved_video_sha256"],
             "completed_utc": datetime.now(timezone.utc).isoformat()
@@ -217,15 +219,21 @@ def upload_private(job_id, confirmation):
         print("VIDEO ID:", video_id)
         print("VERIFY PRIVACY IN YOUTUBE STUDIO")
 
-    except Exception:
-        write_record({
+    except Exception as exc:
+        auth_failed = type(exc).__name__ == "RefreshError" or "invalid_grant" in str(exc).lower()
+        failure = {
             "job_id": job_id,
             "state": "RECONCILIATION_REQUIRED",
+            "error_type": type(exc).__name__,
             "note": (
-                "Upload may or may not have reached YouTube. "
-                "Inspect YouTube Studio before any retry."
-            )
-        })
+                "YouTube did not accept this video. Check it again, then use Approve & Publish."
+                if auth_failed else
+                "Upload may or may not have reached YouTube. Inspect YouTube Studio before any retry."
+            ),
+        }
+        if started_network and not auth_failed:
+            failure["upload_started"] = True
+        write_record(failure)
         raise
 
 

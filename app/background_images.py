@@ -40,7 +40,7 @@ def load_background_config(root):
         if not isinstance(background, dict):
             background = {}
         requested = str(background.get("mode") or "photo").strip().lower()
-        if requested in {"solid", "photo"}:
+        if requested in {"solid", "photo", "cartoon"}:
             mode = requested
         opacity = _opacity_or_default(background.get("opacity", DEFAULT_OPACITY))
         blur = float(background.get("blur_radius") or 0)
@@ -48,7 +48,7 @@ def load_background_config(root):
             blur = 0.0
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         mode, opacity, blur = "photo", DEFAULT_OPACITY, 0.0
-    if mode == "solid":
+    if mode != "photo":
         opacity = 0.0
     return {"mode": mode, "opacity": opacity, "blur": blur}
 

@@ -2,7 +2,7 @@
   "visual_style": "professional_photography",
   "apply_to_all_videos": true,
   "background": {
-    "mode": "photo",
+    "mode": "cartoon",
     "type": "high_resolution_photograph",
     "opacity": 0.08,
     "blur_radius": 2,
@@ -19,6 +19,12 @@
   },
   "narration": {
     "engine": "xtts",
-    "speaker": "Andrew Chipper"
+    "speaker": "Aaron Dreschner",
+    "min_seconds": 60
+  },
+  "character_id": "hvac-tech",
+  "animation": {
+    "mode": "still",
+    "fallback": "still"
   }
 }

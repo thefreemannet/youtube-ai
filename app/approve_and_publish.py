@@ -1,15 +1,17 @@
 """Record one human approval, then queue only the platforms that were selected.
 
 This module does not talk to YouTube or Instagram directly. Uploads stay in the
-existing private-YouTube and explicit-Instagram workers. An existing upload
-record is never overwritten or retried.
+existing YouTube and explicit-Instagram workers. A video that already
+received a platform id is never sent again. A failed attempt with no id can be.
 """
 
 import json
 
+from app.categories import category_info
 from app.dashboard_publisher import enqueue
 from app.publishing_workflow import inspect, prepare, save_metadata
 from app.review_gate import JOBS, decide, review_report
+from app.spanish_titles import spanish_title
 
 # Already uploaded. Approval records and upload records for this job stay as they are.
 LOCKED_JOBS = {"20261110-225615-919b89"}
@@ -53,14 +55,17 @@ def publishing_copy(job_id, title="", description="", caption=""):
     narration = ""
     if narration_path.is_file():
         narration = " ".join(narration_path.read_text(encoding="utf-8").split())
+    spanish = str(job.get("language") or "").lower() == "es"
+    if spanish:
+        title = spanish_title(topic, narration)[:100]
+        note = "Explicación educativa. No sustituye el manual del equipo ni las normas aplicables."
+    else:
+        title = topic[:100]
+        note = category_info(job.get("category")).get("publishing_note") or "An educational explanation."
     generated = {
-        "title": topic[:100],
-        "description": (
-            f"{topic}\n\n{narration}\n\n"
-            "Educational HVAC explanation for technicians and beginners. "
-            "This is not a substitute for equipment manuals or applicable codes."
-        ).strip(),
-        "caption": f"{topic}\n\n{narration}".strip()[:2200],
+        "title": title,
+        "description": f"{title}\n\n{narration}\n\n{note}".strip(),
+        "caption": f"{title}\n\n{narration}".strip()[:2200],
     }
     limits = {"title": 100, "description": 5000, "caption": 2200}
     supplied = {"title": title, "description": description, "caption": caption}
@@ -85,7 +90,8 @@ def _open_platforms(info):
     for platform in PLATFORMS:
         state = str(info["platform_states"].get(platform) or "")
         request_state = str(info["request_states"].get(platform) or "")
-        if state == "NOT_UPLOADED" and request_state == "NOT_REQUESTED":
+        retryable = info.get("retryable", {}).get(platform) is True
+        if (state == "NOT_UPLOADED" and request_state == "NOT_REQUESTED") or retryable:
             open_platforms.append(platform)
             continue
         skipped[platform] = {
@@ -126,6 +132,7 @@ def approve_and_publish(
     checked_media_licenses,
     publish_youtube=False,
     publish_instagram=False,
+    publish_tiktok=False,
     confirm_publish=False,
     title="",
     description="",
@@ -143,6 +150,8 @@ def approve_and_publish(
         selected.append("youtube")
     if publish_instagram is True:
         selected.append("instagram")
+    if publish_tiktok is True:
+        selected.append("tiktok")
     if selected and confirm_publish is not True:
         raise ValueError("Confirm publishing before any upload is queued")
     copy = publishing_copy(job_id, title, description, caption) if selected else None
@@ -174,6 +183,8 @@ def approve_and_publish(
     info = _ensure_prepared(job_id)
     open_now, skipped = _open_platforms(info)
     for platform in selected:
+        if platform == "tiktok":
+            continue
         if platform in skipped:
             result["uploads"][platform] = skipped[platform]
             continue
@@ -200,11 +211,49 @@ def approve_and_publish(
             "request_state": queued.get("request_state", "QUEUED"),
             "message": "Upload queued.",
         }
+    if "tiktok" in selected:
+        from app.publishing_workflow import PUBLISHER, config
+        token_file = PUBLISHER / "credentials" / "tiktok_token.json"
+        tiktok_on = config().get("publishing_enabled") is True and config().get("platforms", {}).get("tiktok", {}).get("enabled") is True
+        connected = tiktok_on and token_file.is_file() and not (token_file.stat().st_mode & 0o077)
+        state = str(info.get("platform_states", {}).get("tiktok") or "NOT_UPLOADED")
+        request_state = str(info.get("request_states", {}).get("tiktok") or "NOT_REQUESTED")
+        retryable = info.get("retryable", {}).get("tiktok") is True
+        if not connected:
+            result["uploads"]["tiktok"] = {
+                "queued": False,
+                "skipped": True,
+                "message": "TikTok account is not connected",
+            }
+        elif (state == "NOT_UPLOADED" and request_state == "NOT_REQUESTED") or retryable:
+            from app.tiktok_uploader import save_tiktok_metadata
+            save_tiktok_metadata(job_id, copy["title"])
+            queued = enqueue(job_id, "tiktok", job_id)
+            result["uploads"]["tiktok"] = {
+                "queued": True,
+                "skipped": False,
+                "request_state": queued.get("request_state", "QUEUED"),
+                "message": "Upload queued.",
+            }
+        else:
+            result["uploads"]["tiktok"] = {
+                "queued": False,
+                "skipped": True,
+                "state": state,
+                "request_state": request_state,
+                "message": "An upload record or request already exists. It was not retried.",
+            }
     if any(item.get("queued") for item in result["uploads"].values()):
         result["message"] = (
             "Approval recorded and the selected uploads were queued. "
-            "YouTube is private. Instagram is public only because it was selected."
+            "YouTube is public. If Instagram was selected, the studio checks the Reel and confirms it after the upload."
         )
+        if result["uploads"].get("tiktok", {}).get("queued"):
+            result["message"] += " TikTok is queued with this category’s hashtags."
+        elif result["uploads"].get("tiktok", {}).get("message") == "TikTok account is not connected":
+            result["message"] += " TikTok was not uploaded because the account is not connected."
+    elif result["uploads"].get("tiktok", {}).get("message") == "TikTok account is not connected":
+        result["message"] = "TikTok account is not connected. Nothing was uploaded."
     else:
         result["message"] = "Nothing new was uploaded. Existing platform records were left unchanged."
     return result

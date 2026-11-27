@@ -1,11 +1,13 @@
 # J3G YouTube AI
 
-Browser dashboard for creating, reviewing, and publishing educational HVAC videos.
+Repository: https://github.com/thefreemannet/youtube-ai
 
-The running application lives on `youtube-ai` (`192.168.120.111`) at `/opt/j3g-youtube-ai` and is served by `j3g-youtube-ai.service` on port 8766.
+Design, agent specifications, and diagrams: [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md)
+
+Browser dashboard for creating, reviewing, and publishing educational videos. A video starts when a person asks for it on the site.
 
 Public site: https://youtube-ai.lab.j3gdigital.com
 
-Narration uses the existing XTTS service. The default English speaker is Andrew Chipper. Video output is 720x1280 on solid backgrounds.
+Narration uses a local XTTS voice. The speaker is Aaron Dreschner. Video output is 720x1280.
 
 Credentials, upload tokens, rendered videos, and job media are not in this repository.

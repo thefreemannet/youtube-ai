@@ -23,7 +23,7 @@ def probe(path):
             "-show_entries",
             "format=duration,size:"
             "stream=codec_type,codec_name,width,height,"
-            "r_frame_rate,sample_rate,channels",
+            "r_frame_rate,sample_rate,channels,start_time",
             "-of", "json", str(path)
         ],
         capture_output=True,
@@ -40,6 +40,29 @@ def sha256(path):
         for block in iter(lambda: f.read(1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def instagram_export_args(source, destination):
+    """Copy the preview picture and rebuild only the audio.
+
+    Re-encoding the picture without an edit list leaves it starting at 0.083s.
+    Instagram then rejects the upload with "Request processing failed".
+    The preview is already H.264, 720x1280, and 24 fps, which Instagram accepts.
+    """
+    return [
+        "ffmpeg", "-nostdin", "-y",
+        "-hide_banner", "-loglevel", "error",
+        "-i", str(source),
+        "-map", "0:v:0",
+        "-map", "0:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-ar", "48000",
+        "-ac", "2",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(destination),
+    ]
 
 
 def main(job_id, prepare=False):
@@ -115,26 +138,17 @@ def main(job_id, prepare=False):
 
     try:
         subprocess.run(
-            [
-                "ffmpeg", "-nostdin", "-y",
-                "-hide_banner", "-loglevel", "error",
-                "-i", str(source),
-                "-map", "0:v:0",
-                "-map", "0:a:0",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-ar", "48000",
-                "-ac", "2",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
-                str(temporary)
-            ],
+            instagram_export_args(source, temporary),
             check=True,
             timeout=300
         )
 
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise RuntimeError("Export file missing or empty")
+        exported = probe(temporary)
+        exported_video = next((s for s in exported.get("streams", []) if s.get("codec_type") == "video"), {})
+        if float(exported_video.get("start_time") or 0) > 0.001:
+            raise RuntimeError("Export video does not start at zero")
 
         # Recheck approval after conversion.
         final_gate = publishing_preflight(job_id)
